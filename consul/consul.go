@@ -5,15 +5,17 @@ import (
 	"log"
 	"net/url"
 	"strings"
-
+	"os"
+    "encoding/json"
 	"github.com/gliderlabs/registrator/bridge"
 	consulapi "github.com/hashicorp/consul/api"
 )
 
 const DefaultInterval = "10s"
-
+var Hostname string
 func init() {
 	bridge.Register(new(Factory), "consul")
+	Hostname, _ = os.Hostname()
 }
 
 func (r *ConsulAdapter) interpolateService(script string, service *bridge.Service) string {
@@ -53,14 +55,29 @@ func (r *ConsulAdapter) Ping() error {
 }
 
 func (r *ConsulAdapter) Register(service *bridge.Service) error {
-	registration := new(consulapi.AgentServiceRegistration)
-	registration.ID = service.ID
-	registration.Name = service.Name
-	registration.Port = service.Port
-	registration.Tags = service.Tags
-	registration.Address = service.IP
-	registration.Check = r.buildCheck(service)
-	return r.client.Agent().ServiceRegister(registration)
+	agentService := new(consulapi.AgentService)
+	agentService.ID = service.ID
+	agentService.Service = service.Name
+	agentService.Port = service.Port
+	agentService.Tags = service.Tags
+	agentService.Address = service.IP
+	
+	registration := new(consulapi.CatalogRegistration)
+	registration.Node = Hostname
+	registration.Address = service.Origin.HostIP
+	registration.Datacenter =  service.Attrs["region"];
+    registration.Service = agentService;
+    registration.Check = nil
+
+    writeOptions := new(consulapi.WriteOptions)
+    writeOptions.Datacenter =  service.Attrs["region"];
+
+	out, _ := json.Marshal(registration)
+
+    log.Println("REGISTERING :",string(out))
+	 _ , res := r.client.Catalog().Register(registration,writeOptions);
+
+	return res
 }
 
 func (r *ConsulAdapter) buildCheck(service *bridge.Service) *consulapi.AgentServiceCheck {
@@ -90,7 +107,25 @@ func (r *ConsulAdapter) buildCheck(service *bridge.Service) *consulapi.AgentServ
 }
 
 func (r *ConsulAdapter) Deregister(service *bridge.Service) error {
-	return r.client.Agent().ServiceDeregister(service.ID)
+    deRegistration := new(consulapi.CatalogDeregistration)
+	deRegistration.Node = Hostname
+	deRegistration.Address = ""
+	deRegistration.Datacenter =  service.Attrs["region"];
+    deRegistration.ServiceID =  service.ID;
+    deRegistration.CheckID = ""
+
+
+    writeOptions := new(consulapi.WriteOptions)
+    writeOptions.Datacenter =  service.Attrs["region"];
+
+	out, _ := json.Marshal(deRegistration)
+
+    log.Println("DE-REGISTERING :",string(out))
+    
+	 _ , res := r.client.Catalog().Deregister(deRegistration,writeOptions);
+
+
+	return res
 }
 
 func (r *ConsulAdapter) Refresh(service *bridge.Service) error {
